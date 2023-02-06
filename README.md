@@ -1,7 +1,6 @@
 # CompileCPP
-Compile C++ project
 
-Compile a cpp project.
+Compile a CPP project.
 Must be executed in project folder.
 Must have a config.json in folder.
 config.json must have:
