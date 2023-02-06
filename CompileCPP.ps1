@@ -1,91 +1,129 @@
-param($outName = 'application')
-
 # Utility variables
 $vars =
 @{
-    workspaceFolder = Get-Location | Convert-Path
-    SDKLibraryFolder = 'C:\Program Files (x86)\Windows Kits\10\Lib\10.0.20348.0\um\x64'
+    workspaceFolder = (Get-Location | Convert-Path) + '\'
 }
 
-$outFile = $vars['workspaceFolder'] + '\' + $outName + '.exe'
-
-# Check if src folder exist else quit
-$sourceDir = $vars["workspaceFolder"] + '\src\'
-
-if(!(Test-Path -Path $sourceDir))
+# Replace all ${variableName} in a string with their values from $vars
+Function ReplaceKeywords($text) 
 {
-    Write-Host 'No src/ folder in current directory.' -ForegroundColor Red
+    $words = $text -split '\${(.+?)}'
+    $output = ''
+    Foreach ($word In $words)
+    {
+        $key = $vars[$word]
+        If($key) { $output+=$key } Else { $output+=$word }
+    }
+
+    Return $output
+}
+
+Write-Host 'Searching for json configuration file' -ForegroundColor Green
+
+# Get config.json
+$configFile = $vars['workspaceFolder'] + 'config.json'
+
+# If config.json is not found, quit
+If(!(Test-Path $configFile))
+{
+    Write-Host 'No configuration file in current directory' -ForegroundColor Red
     Write-Host 'Quit' -ForegroundColor Red
     Exit
 }
 
-# Searching for files to compile
-Write-Host 'Searching for source files' -ForegroundColor Green
-$sourceFiles = Get-ChildItem -Path $sourceDir -Recurse | Convert-Path
+# Convert .json file into PS Object
+$configContent = Get-Content $configFile | ConvertFrom-Json
 
-if(!$sourceFiles)
+# Get workspace/src folder
+$sourceFolder = $configContent.sourceFolder
+
+If(!$sourceFolder)
+{
+    Write-Host 'No assigned value for sourceFolder in config.json' -ForegroundColor Red
+    Write-Host 'Quit'
+    Exit
+}
+
+$sourceFolder = ReplaceKeywords($sourceFolder)
+# If src folder is not found, quit
+If(!(Test-Path -Path $sourceFolder))
+{
+    Write-Host $sourceFolder 'does not exist.' -ForegroundColor Red
+    Write-Host 'Quit' -ForegroundColor Red
+    Exit
+}
+
+# Searching for files in src folder to compile
+Write-Host 'Searching for source files' -ForegroundColor Green
+$sourceFiles = Get-ChildItem -Path $sourceFolder -Recurse | Convert-Path
+
+# If not file is found, quit
+If(!$sourceFiles)
 {
     Write-Host 'No files founded' -ForegroundColor Red
     Write-Host 'Quit' -ForegroundColor Red
     Exit
 }
 
-Write-Host "$($sourceFiles.length) files founded :" -ForegroundColor Magenta
+$nbFiles = If($sourceFiles.GetType() -Eq [string]) { 1 } Else { $sourceFiles.Length }
+Write-Host "$($nbFiles) files founded :" -ForegroundColor Magenta
 
+# Get filename and extension wihtout path informations
+# Ex: C:\project\src\application.cpp -> application.cpp
 Write-Host $sourceFiles.ForEach({$_.split('\').Where({$_}, 'Last')})
 
-# Searching configuration file
-Write-Host 'Searching for json configuration file' -ForegroundColor Green
+# Output folder
+$outputFolder = $vars['workspaceFolder']
 
-$configFile = $vars['workspaceFolder'] + '\config.json'
+# Output filename.exe
+$outputName = $configContent.outputName
+$outputName = If(!$outputName) { 'application' } Else { $outputName }
+$outFile = $outputFolder + $outputName + '.exe'
 
-$args = $sourceFiles + @('-o', $outName)
+Write-Host 'Configuration file founded' -ForegroundColor Magenta
 
-if(!(Test-Path $configFile))
+$compiler = $configContent.compiler
+
+If(!$compiler)
 {
-    Write-Host 'No configuration file in current directory' -ForegroundColor Magenta
+    Write-Host 'No compiler in config.json' -ForegroundColor Red
+    Write-Host 'Quit' -ForegroundColor Red
+    Exit
 }
-else
+
+$spec = $configContent.spec
+$include = $configContent.include
+$lib = $configContent.lib
+
+If($include)
 {
-    Write-Host 'Configuration file founded' -ForegroundColor Magenta
-
-    $configContent = Get-Content $configFile | ConvertFrom-Json
-
-    $spec = $configContent.spec
-    $include = $configContent.include
-    $lib = $configContent.lib
-
-    For ($i = 0; $i -lt $include.length; $i++)
+    For ($i = 0; $i -Lt $include.length; $i++)
     {
-        $line = $include[$i] -split '\${(.*)}'
-        if($line.length -gt 1)
-        {
-            $key = $line[1] + ''
-            $include[$i] = $line[0] + $vars[$key] + $line[2]
-        }
+        $include[$i] = ReplaceKeywords($include[$i])
         
     }
+}
 
-    For ($i = 0; $i -lt $lib.length; $i++)
+if($lib)
+{
+    For ($i = 0; $i -Lt $lib.length; $i++)
     {
-        $line = $lib[$i] -split '\${(.*)}'
-        if($line.length -gt 1)
-        {
-            $key = $line[1] + ''
-            $lib[$i] = $line[0] + $vars[$key] + $line[2]
-        }
+        $lib[$i] = ReplaceKeywords($lib[$i])
         
     }
-
-    $args = $spec + $include + $sourceFiles + @('-o', $outName) + $lib
 }
 
 
-Write-Host g++ $args -ForegroundColor Cyan
-# Write-Host $outFile
+$arguments = $spec + $include + $sourceFiles + @('-o', $outputName) + $lib
+
+# Show full command
+Write-Host $compiler $arguments -ForegroundColor Cyan
+
+# Show output file
+Write-Host $outFile
 
 Write-Host 'Compiling...' -ForegroundColor Green
-& g++ $args
+& $compiler $arguments
 
-Write-Host 'Executing !' -ForegroundColor Green
+Write-Host 'Executing!' -ForegroundColor Green
 & $outFile -NoNewWindow
